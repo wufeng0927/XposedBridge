@@ -6,15 +6,18 @@ import android.app.AndroidAppHelper;
 import android.app.Application;
 import android.app.LoadedApk;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.res.CompatibilityInfo;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XResources;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.os.IBinder;
 import android.os.Process;
+import android.text.TextUtils;
 import android.util.Log;
 import android.widget.Toast;
 
@@ -38,6 +41,7 @@ import java.util.zip.ZipFile;
 
 import dalvik.system.DexFile;
 import dalvik.system.PathClassLoader;
+import de.robv.android.xposed.TestPackage.test;
 import de.robv.android.xposed.callbacks.XC_InitPackageResources;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 import de.robv.android.xposed.callbacks.XCallback;
@@ -82,6 +86,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 	 * Hook some methods which we want to create an easier interface for developers.
 	 */
 	/*package*/ static void initForZygote() throws Throwable {
+		Log.i(TAG, "initForZygote>>>>>>");
 		if (needsToCloseFilesForFork()) {
 			XC_MethodHook callback = new XC_MethodHook() {
 				@Override
@@ -102,6 +107,9 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 
 		final HashSet<String> loadedPackagesInProcess = new HashSet<>(1);
 
+		Log.i(TAG, "before findAndHookMethod>>>>>>");
+		// https://paper.tuisec.win/detail-70011a2328b2266.html
+		// 挂钩了ActivityThread 类的 handleBindApplication 函数，这个函数是在android ams 系统创建新进程成功后在新进程内部调用的，挂钩这个函数，可以在新进程创建后做一些事情
 		// normal process initialization (for new Activity, Service, BroadcastReceiver etc.)
 		findAndHookMethod(ActivityThread.class, "handleBindApplication", "android.app.ActivityThread.AppBindData", new XC_MethodHook() {
 			@Override
@@ -109,6 +117,11 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 				ActivityThread activityThread = (ActivityThread) param.thisObject;
 				ApplicationInfo appInfo = (ApplicationInfo) getObjectField(param.args[0], "appInfo");
 				String reportedPackageName = appInfo.packageName.equals("android") ? "system" : appInfo.packageName;
+				Log.i(TAG, "reportedPackageName:"+reportedPackageName+">>>>>>");
+
+
+
+
 				SELinuxHelper.initForProcess(reportedPackageName);
 				ComponentName instrumentationName = (ComponentName) getObjectField(param.args[0], "instrumentationName");
 				if (instrumentationName != null) {
@@ -125,6 +138,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 				LoadedApk loadedApk = activityThread.getPackageInfoNoCheck(appInfo, compatInfo);
 				XResources.setPackageNameForResDir(appInfo.packageName, loadedApk.getResDir());
 
+				// XposedBridge 会遍历 set- sLoadedPackageCallbacks 中的所有钩子函数(模块中定义的)，并进行回调
 				XC_LoadPackage.LoadPackageParam lpparam = new XC_LoadPackage.LoadPackageParam(XposedBridge.sLoadedPackageCallbacks);
 				lpparam.packageName = reportedPackageName;
 				lpparam.processName = (String) getObjectField(param.args[0], "processName");
@@ -132,6 +146,47 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 				lpparam.appInfo = appInfo;
 				lpparam.isFirstApplication = true;
 				XC_LoadPackage.callAll(lpparam);
+
+
+				//直接hook指定包
+				if(!TextUtils.isEmpty(reportedPackageName)
+						&& "com.example.imeitest".equals(reportedPackageName)){
+					Log.i(TAG, "Hook "+reportedPackageName +" Begin>>>>>>");
+
+					// 获取指定包的context以及classLoader
+					try {
+						XposedHelpers.findAndHookMethod("com.example.imeitest.MainActivity",
+								loadedApk.getClassLoader(),
+								"onCreate",
+								Bundle.class,
+								new XC_MethodHook(){
+							@Override
+							protected void beforeHookedMethod(MethodHookParam param) throws Throwable{
+								super.beforeHookedMethod(param);
+							}
+
+							@Override
+							protected void afterHookedMethod(MethodHookParam param) throws Throwable{
+								super.afterHookedMethod(param);
+								Context mContext = (Context) param.thisObject;
+								//通过onCreate执行完毕后,获取结果对象的classloader
+								ClassLoader loader = mContext.getClassLoader();
+
+								Log.i(TAG, "Hook appClz："+mContext +" Begin>>>>>>");
+								Log.i(TAG, "Hook loader："+loader +" Begin>>>>>>");
+
+								test.HookPackage(mContext, loader);
+
+							}
+						});
+
+
+					}
+					catch (Exception e) {
+						e.printStackTrace();
+					}
+
+				}
 
 				if (reportedPackageName.equals(INSTALLER_PACKAGE_NAME))
 					hookXposedInstaller(lpparam.classLoader);
@@ -447,6 +502,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 	 */
 	/*package*/ static void loadModules() throws IOException {
 		final String filename = BASE_DIR + "conf/modules.list";
+		// 举例：data/app/com.example.xposedtest-1/base.apk 模块第一次安装的apk路径
 		BaseService service = SELinuxHelper.getAppDataFileService();
 		if (!service.checkFileExists(filename)) {
 			Log.e(TAG, "Cannot load any modules because " + filename + " was not found");
@@ -545,6 +601,9 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 
 					final Object moduleInstance = moduleClass.newInstance();
 					if (XposedBridge.isZygote) {
+						// 针对系统级别hook
+						// 实现IXposedHookZygoteInit接口,在Zygote进程启动之前执行initZygote方法,该方法只会执行两次,
+						// 在实际操作过程中可以用于工具类的初始化,避免在IXposedHookLoadPackage中会重复加载
 						if (moduleInstance instanceof IXposedHookZygoteInit) {
 							IXposedHookZygoteInit.StartupParam param = new IXposedHookZygoteInit.StartupParam();
 							param.modulePath = apk;
@@ -552,9 +611,12 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 							((IXposedHookZygoteInit) moduleInstance).initZygote(param);
 						}
 
+						// 针对应用级别hook
 						if (moduleInstance instanceof IXposedHookLoadPackage)
 							XposedBridge.hookLoadPackage(new IXposedHookLoadPackage.Wrapper((IXposedHookLoadPackage) moduleInstance));
 
+
+						// 资源布局初始化时进行hook,如果要使用此类,必须在xposed->设置中,将[禁用资源勾子]一项取消打钩
 						if (moduleInstance instanceof IXposedHookInitPackageResources)
 							XposedBridge.hookInitPackageResources(new IXposedHookInitPackageResources.Wrapper((IXposedHookInitPackageResources) moduleInstance));
 					} else {

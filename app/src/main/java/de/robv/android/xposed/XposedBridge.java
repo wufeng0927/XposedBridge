@@ -92,7 +92,7 @@ public final class XposedBridge {
 					XposedInit.hookResources();
 					XposedInit.initForZygote();
 				}
-
+				//调用所有的xposed插件
 				XposedInit.loadModules();
 			} else {
 				Log.e(TAG, "Not initializing Xposed because of previous errors");
