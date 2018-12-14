@@ -114,6 +114,10 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 		findAndHookMethod(ActivityThread.class, "handleBindApplication", "android.app.ActivityThread.AppBindData", new XC_MethodHook() {
 			@Override
 			protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+
+				//调用所有的xposed插件（IXposedHookLoadPackage）
+				XposedInit.loadModules(true);
+
 				ActivityThread activityThread = (ActivityThread) param.thisObject;
 				ApplicationInfo appInfo = (ApplicationInfo) getObjectField(param.args[0], "appInfo");
 				String reportedPackageName = appInfo.packageName.equals("android") ? "system" : appInfo.packageName;
@@ -500,7 +504,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 	/**
 	 * Try to load all modules defined in <code>BASE_DIR/conf/modules.list</code>
 	 */
-	/*package*/ static void loadModules() throws IOException {
+	/*package*/ static void loadModules(boolean isLoadHookLoadPackage) throws IOException {
 		final String filename = BASE_DIR + "conf/modules.list";
 		// 举例：data/app/com.example.xposedtest-1/base.apk 模块第一次安装的apk路径
 		BaseService service = SELinuxHelper.getAppDataFileService();
@@ -519,7 +523,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 		BufferedReader apks = new BufferedReader(new InputStreamReader(stream));
 		String apk;
 		while ((apk = apks.readLine()) != null) {
-			loadModule(apk, topClassLoader);
+			loadModule(isLoadHookLoadPackage, apk, topClassLoader);
 		}
 		apks.close();
 	}
@@ -528,7 +532,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 	 * Load a module from an APK by calling the init(String) method for all classes defined
 	 * in <code>assets/xposed_init</code>.
 	 */
-	private static void loadModule(String apk, ClassLoader topClassLoader) {
+	private static void loadModule(boolean isLoadHookLoadPackage, String apk, ClassLoader topClassLoader) {
 		Log.i(TAG, "Loading modules from " + apk);
 
 		if (!new File(apk).exists()) {
@@ -613,7 +617,16 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 
 						// 针对应用级别hook
 						if (moduleInstance instanceof IXposedHookLoadPackage)
-							XposedBridge.hookLoadPackage(new IXposedHookLoadPackage.Wrapper((IXposedHookLoadPackage) moduleInstance));
+							// 在hook handleBindApplication的时候也调用一次loadModules，为true
+							// 此时可以保证每次启动app时都能重新获取module_list列表
+							Log.i(XposedBridge.TAG, "XposedBridge.hookLoadPackage begin>>>");
+							if(isLoadHookLoadPackage){
+								Log.i(XposedBridge.TAG, "XposedBridge.hookLoadPackage Start>>>");
+								XposedBridge.hookLoadPackage(new IXposedHookLoadPackage.Wrapper((IXposedHookLoadPackage) moduleInstance));
+							}else {
+								Log.i(XposedBridge.TAG, "XposedBridge.hookLoadPackage Not Start");
+							}
+
 
 
 						// 资源布局初始化时进行hook,如果要使用此类,必须在xposed->设置中,将[禁用资源勾子]一项取消打钩
