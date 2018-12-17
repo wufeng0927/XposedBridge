@@ -259,6 +259,20 @@ package de.robv.android.xposed {
 
 }
 
+package de.robv.android.xposed.TestPackage {
+
+  public class ContextUtil {
+    ctor public ContextUtil();
+    method public static android.content.Context getContext();
+  }
+
+  public class test {
+    ctor public test();
+    method public static void HookPackage(android.content.Context, java.lang.ClassLoader);
+  }
+
+}
+
 package de.robv.android.xposed.callbacks {
 
   public abstract interface IXUnhook {

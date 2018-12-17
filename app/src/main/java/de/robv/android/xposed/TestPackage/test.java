@@ -10,7 +10,7 @@ import static de.robv.android.xposed.XposedHelpers.findAndHookMethod;
 
 public class test{
 
-    public static void HookPackage(Context context, ClassLoader loader){
+    public static void HookPackage(ClassLoader loader){
         findAndHookMethod("com.example.imeitest.MainActivity",
                 loader,
                 "getAndroidID",

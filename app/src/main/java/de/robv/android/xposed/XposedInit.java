@@ -13,7 +13,6 @@ import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XResources;
 import android.os.Build;
-import android.os.Bundle;
 import android.os.Environment;
 import android.os.IBinder;
 import android.os.Process;
@@ -143,7 +142,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 				XResources.setPackageNameForResDir(appInfo.packageName, loadedApk.getResDir());
 
 				// XposedBridge 会遍历 set- sLoadedPackageCallbacks 中的所有钩子函数(模块中定义的)，并进行回调
-				XC_LoadPackage.LoadPackageParam lpparam = new XC_LoadPackage.LoadPackageParam(XposedBridge.sLoadedPackageCallbacks);
+				final XC_LoadPackage.LoadPackageParam lpparam = new XC_LoadPackage.LoadPackageParam(XposedBridge.sLoadedPackageCallbacks);
 				lpparam.packageName = reportedPackageName;
 				lpparam.processName = (String) getObjectField(param.args[0], "processName");
 				lpparam.classLoader = loadedApk.getClassLoader();
@@ -157,38 +156,53 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 						&& "com.example.imeitest".equals(reportedPackageName)){
 					Log.i(TAG, "Hook "+reportedPackageName +" Begin>>>>>>");
 
-					// 获取指定包的context以及classLoader
-					try {
-						XposedHelpers.findAndHookMethod("com.example.imeitest.MainActivity",
-								loadedApk.getClassLoader(),
-								"onCreate",
-								Bundle.class,
-								new XC_MethodHook(){
-							@Override
-							protected void beforeHookedMethod(MethodHookParam param) throws Throwable{
-								super.beforeHookedMethod(param);
-							}
+                    //将loadPackageParam的classloader替换为宿主程序Application的classloader,解决宿主程序存在多个.dex文件时,有时候ClassNotFound的问题
+                    XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                            Context context=(Context) param.args[0];
+                            lpparam.classLoader = context.getClassLoader();
 
-							@Override
-							protected void afterHookedMethod(MethodHookParam param) throws Throwable{
-								super.afterHookedMethod(param);
-								Context mContext = (Context) param.thisObject;
-								//通过onCreate执行完毕后,获取结果对象的classloader
-								ClassLoader loader = mContext.getClassLoader();
+							Log.i(TAG, "Hook appClz：" + context +" Begin>>>>>>");
+							Log.i(TAG, "Hook loader：" + context.getClassLoader() +" Begin>>>>>>");
 
-								Log.i(TAG, "Hook appClz："+mContext +" Begin>>>>>>");
-								Log.i(TAG, "Hook loader："+loader +" Begin>>>>>>");
+                            test.HookPackage(context.getClassLoader());
 
-								test.HookPackage(mContext, loader);
+                        }
+                    });
 
-							}
-						});
-
-
-					}
-					catch (Exception e) {
-						e.printStackTrace();
-					}
+//					// 获取指定包的context以及classLoader
+//					try {
+//						XposedHelpers.findAndHookMethod("com.example.imeitest.MainActivity",
+//								loadedApk.getClassLoader(),
+//								"onCreate",
+//								Bundle.class,
+//								new XC_MethodHook(){
+//							@Override
+//							protected void beforeHookedMethod(MethodHookParam param) throws Throwable{
+//								super.beforeHookedMethod(param);
+//							}
+//
+//							@Override
+//							protected void afterHookedMethod(MethodHookParam param) throws Throwable{
+//								super.afterHookedMethod(param);
+//								Context mContext = (Context) param.thisObject;
+//								//通过onCreate执行完毕后,获取结果对象的classloader
+//								ClassLoader loader = mContext.getClassLoader();
+//
+//								Log.i(TAG, "Hook appClz："+mContext +" Begin>>>>>>");
+//								Log.i(TAG, "Hook loader："+loader +" Begin>>>>>>");
+//
+//								test.HookPackage(mContext, loader);
+//
+//							}
+//						});
+//
+//
+//					}
+//					catch (Exception e) {
+//						e.printStackTrace();
+//					}
 
 				}
 
@@ -198,6 +212,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 		});
 
 		// system_server initialization
+        // Android应用框架中的各种Service，例如ActivityManagerService，PacakgeManagerService，WindowManagerService等等重要的系统服务都是在SystemServer中启动的
 		if (Build.VERSION.SDK_INT < 21) {
 			findAndHookMethod("com.android.server.ServerThread", null,
 					Build.VERSION.SDK_INT < 19 ? "run" : "initAndLoop", new XC_MethodHook() {
@@ -250,6 +265,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 		}
 
 		// when a package is loaded for an existing process, trigger the callbacks as well
+        // system进程和app进程都运行着一个或多个app，每个app都会有一个对应的Application对象(该对象跟LoadedApk一一对应)
 		hookAllConstructors(LoadedApk.class, new XC_MethodHook() {
 			@Override
 			protected void afterHookedMethod(MethodHookParam param) throws Throwable {

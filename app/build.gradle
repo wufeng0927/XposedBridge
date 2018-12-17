@@ -2,9 +2,13 @@ import com.android.builder.core.BuilderConstants
 
 apply plugin: 'com.android.application'
 
+tasks.withType(Javadoc) {
+    options.encoding = "UTF-8"
+}
+
 android {
     compileSdkVersion 23
-    buildToolsVersion "23.0.3"
+    buildToolsVersion '28.0.3'
 
     defaultConfig {
         minSdkVersion 15
