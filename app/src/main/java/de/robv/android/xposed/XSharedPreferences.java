@@ -25,6 +25,11 @@ import de.robv.android.xposed.services.FileResult;
  * read-only and without listeners support. Instead, it is made to be
  * compatible with all ROMs.
  */
+
+
+	// 该类继承了系统类SharedPreferences并提供类额外的reload方法，当我们配置文件更新后，可以调用该方法重新加载。
+	// 该类只支持读操作，如果你尝试去执行写操作会抛异常。
+	// 至于为什么作者没有添加写权限，作者也给出了详细的解释，详见：https://github.com/rovo89/XposedBridge/issues/63
 public final class XSharedPreferences implements SharedPreferences {
 	private static final String TAG = "XSharedPreferences";
 	private final File mFile;

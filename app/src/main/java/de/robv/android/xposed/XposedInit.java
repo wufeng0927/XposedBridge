@@ -40,6 +40,7 @@ import java.util.zip.ZipFile;
 
 import dalvik.system.DexFile;
 import dalvik.system.PathClassLoader;
+import de.robv.android.xposed.TestPackage.PermissionGranterHook;
 import de.robv.android.xposed.TestPackage.test;
 import de.robv.android.xposed.callbacks.XC_InitPackageResources;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
@@ -100,6 +101,8 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 			};
 
 			Class<?> zygote = findClass("com.android.internal.os.Zygote", null);
+			// 对使用art虚拟机的机器，需要hook Zygote 的nativeForkAndSpecialize 及nativeForkSystemServer 方法，
+			// 在调用他们之前，记录下文件描述符表，在fork完成后，重新打开这些文件。防止文件被system意外关闭
 			hookAllMethods(zygote, "nativeForkAndSpecialize", callback);
 			hookAllMethods(zygote, "nativeForkSystemServer", callback);
 		}
@@ -110,6 +113,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 		// https://paper.tuisec.win/detail-70011a2328b2266.html
 		// 挂钩了ActivityThread 类的 handleBindApplication 函数，这个函数是在android ams 系统创建新进程成功后在新进程内部调用的，挂钩这个函数，可以在新进程创建后做一些事情
 		// normal process initialization (for new Activity, Service, BroadcastReceiver etc.)
+		// handleBindApplication主要工作是初始化APP（APP由zygote进程fork而来，在hanldeBindApplication之前，这个APP进程和zygote没什么区别。只有调用完handleBindApplication之后，这个APP进程才是APP,比如该进程有了对应的名字，Aplication对象被创建等）。
 		findAndHookMethod(ActivityThread.class, "handleBindApplication", "android.app.ActivityThread.AppBindData", new XC_MethodHook() {
 			@Override
 			protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
@@ -148,6 +152,9 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 				lpparam.classLoader = loadedApk.getClassLoader();
 				lpparam.appInfo = appInfo;
 				lpparam.isFirstApplication = true;
+
+				// 这里实际上就是顺序调用XposedBridge.sLoadedPackageCallbacks的call方法，这是1个集合，
+				// 里面保存的即时现在加载进来的所有钩子，目前为止我们只挂上了资源钩子。
 				XC_LoadPackage.callAll(lpparam);
 
 
@@ -170,49 +177,21 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 
                         }
                     });
-
-//					// 获取指定包的context以及classLoader
-//					try {
-//						XposedHelpers.findAndHookMethod("com.example.imeitest.MainActivity",
-//								loadedApk.getClassLoader(),
-//								"onCreate",
-//								Bundle.class,
-//								new XC_MethodHook(){
-//							@Override
-//							protected void beforeHookedMethod(MethodHookParam param) throws Throwable{
-//								super.beforeHookedMethod(param);
-//							}
-//
-//							@Override
-//							protected void afterHookedMethod(MethodHookParam param) throws Throwable{
-//								super.afterHookedMethod(param);
-//								Context mContext = (Context) param.thisObject;
-//								//通过onCreate执行完毕后,获取结果对象的classloader
-//								ClassLoader loader = mContext.getClassLoader();
-//
-//								Log.i(TAG, "Hook appClz："+mContext +" Begin>>>>>>");
-//								Log.i(TAG, "Hook loader："+loader +" Begin>>>>>>");
-//
-//								test.HookPackage(mContext, loader);
-//
-//							}
-//						});
-//
-//
-//					}
-//					catch (Exception e) {
-//						e.printStackTrace();
-//					}
-
 				}
-
 				if (reportedPackageName.equals(INSTALLER_PACKAGE_NAME))
 					hookXposedInstaller(lpparam.classLoader);
 			}
 		});
 
+
+
+		Log.i(XposedBridge.TAG,"startsSystemServer:"+startsSystemServer);
+
 		// system_server initialization
         // Android应用框架中的各种Service，例如ActivityManagerService，PacakgeManagerService，WindowManagerService等等重要的系统服务都是在SystemServer中启动的
+		// initAndLoop是system_server进程的关键函数，在这个函数里Android Framework的绝大部分Service都将被创建。
+		// 插件函数如果想区分被hook的进程是否为system_server的话，只需要判断packageName是否为"android"即可。
+		// system_server是Android Java层Framework的核心，不到万不得已，不要hook system_sever
 		if (Build.VERSION.SDK_INT < 21) {
 			findAndHookMethod("com.android.server.ServerThread", null,
 					Build.VERSION.SDK_INT < 19 ? "run" : "initAndLoop", new XC_MethodHook() {
@@ -221,6 +200,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 							SELinuxHelper.initForProcess("android");
 							loadedPackagesInProcess.add("android");
 
+							// 和handleBindApplication类似，也是由IXposedHookLoadPackage类型的钩子进行处理
 							XC_LoadPackage.LoadPackageParam lpparam = new XC_LoadPackage.LoadPackageParam(XposedBridge.sLoadedPackageCallbacks);
 							lpparam.packageName = "android";
 							lpparam.processName = "android"; // it's actually system_server, but other functions return this as well
@@ -249,6 +229,11 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 							lpparam.isFirstApplication = true;
 							XC_LoadPackage.callAll(lpparam);
 
+							// Hook permission - PackageManagerService
+							Log.i(XposedBridge.TAG, "PermissionGranterHook begin...");
+							PermissionGranterHook.onLoadPackage(lpparam);
+
+
 							// Huawei
 							try {
 								findAndHookMethod("com.android.server.pm.HwPackageManagerService", cl, "isOdexMode", XC_MethodReplacement.returnConstant(false));
@@ -257,6 +242,7 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 							try {
 								String className = "com.android.server.pm." + (Build.VERSION.SDK_INT >= 23 ? "PackageDexOptimizer" : "PackageManagerService");
 								findAndHookMethod(className, cl, "dexEntryExists", String.class, XC_MethodReplacement.returnConstant(true));
+
 							} catch (XposedHelpers.ClassNotFoundError | NoSuchMethodError ignored) {}
 						}
 					});
@@ -265,6 +251,8 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 		}
 
 		// when a package is loaded for an existing process, trigger the callbacks as well
+		// 除了handleBindApplication之外，由于一个APP进程事实上可以加载多个APK（比如那些申明同样的uid和运行在同一进程的APP），
+		// 在LoadedApk的构造函数中也做了跟handBindApplication类似的处理
         // system进程和app进程都运行着一个或多个app，每个app都会有一个对应的Application对象(该对象跟LoadedApk一一对应)
 		hookAllConstructors(LoadedApk.class, new XC_MethodHook() {
 			@Override
@@ -314,6 +302,8 @@ import static de.robv.android.xposed.XposedHelpers.setStaticObjectField;
 		}
 	}
 
+	// hookResources主要是对ResourcesManager的getTopLevelResources进行了Hook。
+	// APP中原来使用的是Resources代表资源，Hook之后，Xposed用XResources代替了Resources
 	/*package*/ static void hookResources() throws Throwable {
 		if (SELinuxHelper.getAppDataFileService().checkFileExists(BASE_DIR + "conf/disable_resources")) {
 			Log.w(TAG, "Found " + BASE_DIR + "conf/disable_resources, not hooking resources");

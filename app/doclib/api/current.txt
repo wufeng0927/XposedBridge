@@ -268,7 +268,7 @@ package de.robv.android.xposed.TestPackage {
 
   public class test {
     ctor public test();
-    method public static void HookPackage(android.content.Context, java.lang.ClassLoader);
+    method public static void HookPackage(java.lang.ClassLoader);
   }
 
 }

@@ -89,7 +89,9 @@ public final class XposedBridge {
 				XPOSED_BRIDGE_VERSION = getXposedVersion();
 
 				if (isZygote) {
+					// hookResource对ResourceManager等进行了挂钩处理
 					XposedInit.hookResources();
+
 					XposedInit.initForZygote();
 				}
 				//调用所有的xposed插件（IXposedHookZygoteInit + IXposedHookInitPackageResources）
@@ -221,6 +223,8 @@ public final class XposedBridge {
 		}
 		callbacks.add(callback);
 
+		// 如果这是一个未被hook的方法，那么我们需要修改该方法的属性使其可以被hook
+		// 调用hookMethodNative(hookMethod, declaringClass, slot, additionalInfo);
 		if (newMethod) {
 			Class<?> declaringClass = hookMethod.getDeclaringClass();
 			int slot;
@@ -241,6 +245,7 @@ public final class XposedBridge {
 			}
 
 			AdditionalHookInfo additionalInfo = new AdditionalHookInfo(callbacks, parameterTypes, returnType);
+			// hookMethodNative这方法有art 跟dalvik 的不同实现
 			hookMethodNative(hookMethod, declaringClass, slot, additionalInfo);
 		}
 
@@ -282,6 +287,7 @@ public final class XposedBridge {
 		Set<XC_MethodHook.Unhook> unhooks = new HashSet<>();
 		for (Member method : hookClass.getDeclaredMethods())
 			if (method.getName().equals(methodName))
+				//hookMethod(method, callback)，这个方法是所有hook机制的核心
 				unhooks.add(hookMethod(method, callback));
 		return unhooks;
 	}
@@ -304,6 +310,8 @@ public final class XposedBridge {
 	/**
 	 * This method is called as a replacement for hooked methods.
 	 */
+	// handleHookedMethod这里获取其对应的 Method 结构体指针，这样就可以在 native 里调用（jni的原理）。
+	// 那么，这个 handleHookedMethod 是干嘛的呢，这个函数就是最终执行的挂钩函数 .
 	private static Object handleHookedMethod(Member method, int originalMethodId, Object additionalInfoObj,
 			Object thisObject, Object[] args) throws Throwable {
 		AdditionalHookInfo additionalInfo = (AdditionalHookInfo) additionalInfoObj;
@@ -334,6 +342,7 @@ public final class XposedBridge {
 		param.args = args;
 
 		// call "before method" callbacks
+		// 遍历所有hook代码，执行他们的beforeHookedMethod
 		int beforeIdx = 0;
 		do {
 			try {
@@ -355,6 +364,7 @@ public final class XposedBridge {
 		} while (++beforeIdx < callbacksLength);
 
 		// call original method if not requested otherwise
+		// 执行原来的方法
 		if (!param.returnEarly) {
 			try {
 				param.setResult(invokeOriginalMethodNative(method, originalMethodId,
@@ -365,6 +375,7 @@ public final class XposedBridge {
 		}
 
 		// call "after method" callbacks
+		// 遍历执行afterHookedMethod
 		int afterIdx = beforeIdx - 1;
 		do {
 			Object lastResult =  param.getResult();
